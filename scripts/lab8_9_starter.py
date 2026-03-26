@@ -14,7 +14,7 @@ import numpy as np
 import rospy
 from std_msgs.msg import ColorRGBA
 from geometry_msgs.msg import Twist, Point32, PoseStamped, Pose, Vector3, Quaternion, Point, PoseArray
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import Odometry, Pfath
 from sensor_msgs.msg import LaserScan, PointCloud, ChannelFloat32
 from visualization_msgs.msg import MarkerArray, Marker
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
@@ -160,7 +160,53 @@ class Map:
 
 # PID controller class
 ######### Your code starts here #########
+class PIDController:
+    """
+    Generates control action taking into account instantaneous error (proportional action),
+    accumulated error (integral action) and rate of change of error (derivative action).
+    """
 
+    def __init__(self, kP, kI, kD, kS, u_min, u_max):
+        assert u_min < u_max, "u_min should be less than u_max"
+        # Initializa PID variables here
+        ######### Your code starts here #########
+        self.kP = kP
+        self.kI = kI
+        self.kD = kD
+        self.kS = kS
+
+        self.u_min = u_min
+        self.u_max = u_max
+
+        self.err_prev = 0.0
+        self.err_int = 0.0
+        self.t_prev = None
+
+        ######### Your code ends here #########
+
+    def control(self, err, t):
+        # compute PID control action here
+        ######### Your code starts here #########
+        if self.t_prev is None:
+                self.t_prev = t
+                self.err_prev = err
+                return 0.0
+
+        dt = t - self.t_prev
+        if dt <= 1e-6:
+            return 0.0
+
+        derr = (err - self.err_prev)/dt
+        self.err_int += err*dt
+        self.err_int = max(-self.kS, min(self.kS, self.err_int))
+
+        u = self.kP * err + self.kI * self.err_int + self.kD * derr
+        u = max(self.u_min, min(self.u_max, u))
+
+        self.err_prev = err
+        self.t_prev = t
+
+        return u
 ######### Your code ends here #########
 
 
@@ -190,6 +236,23 @@ class ParticleFilter:
 
         # Initialize uniformly-distributed particles
         ######### Your code starts here #########
+        self.s_n_particles = n_particles
+        self.s_translation_variance = translation_variance
+        self.s_rotation_variance = rotation_variance
+        self.s_measurement_variance = measurement_variance
+        
+        self.s_particles = []
+        
+        x_min, x_max, y_min, y_max = self._map.map_aabb
+        
+        for _ in range(self._n_particles):
+    	x = np.random.uniform(x_min, x_max)
+    	y = np.random.uniform(y_min, y_max)
+    	theta = np.random.uniform(0, 2 * pi)
+
+    	log_p = 0.0  # equal probability in log space
+
+    	self._particles.append(Particle(x, y, theta, log_p))
 
         ######### Your code ends here #########
 
@@ -334,14 +397,39 @@ class Controller:
     def forward_action(self, distance: float):
         # Robot moves forward by a set amount during manual control
         ######### Your code starts here #########
-
+        
+        twist = Twist()
+        twist.linear.x = 0.2
+        twist.angular.z = 0.0
+        
+        start_time = time()
+        duration = distance / 0.2
+        
+        while time () - start_time < duration and not rospy.is_shutdown():
+        	self.robot_ctrl_pub.publish(twist)
+        	
+        twist.linear.x = 0.0
+        self.robot_ctrl_pub.publish(twist)
         ######### Your code ends here #########
 
     def rotate_action(self, goal_theta: float):
         # Robot turns by a set amount during manual control
         ######### Your code starts here #########
-
-
+        twist = Twist()
+        twist.linear.x = 0.0
+        
+        angular_speed = 0.5
+        if angle > 0:
+        	twist.angular.z = angular_speed
+        else:
+        	twist.angular.z = -angular_speed
+        
+        while time () - start_time < duration and not rospy.is_shutdown():
+        	self.robot_ctrl_pub.publish(twist)
+        
+        twist.angular.z = 0.0
+        self.robot_ctrl_pub.publish(twist)
+        
         ######### Your code ends here #########
 
 
@@ -378,18 +466,22 @@ if __name__ == "__main__":
             uinput = input("")
             if uinput == "w": # forward
                 ######### Your code starts here #########
+                controller.forward_action(0.2)
 
                 ######### Your code ends here #########
             elif uinput == "a": # left
                 ######### Your code starts here #########
+                controller.rotate_action(pi / 2)
 
                 ######### Your code ends here #########
             elif uinput == "d": #right
                 ######### Your code starts here #########
+                controller.rotate_action(-pi / 2)
 
                 ######### Your code ends here #########
             elif uinput == "s": # backwards
                 ######### Your code starts here #########
+                controller.forward(-0.2)
 
                 ######### Your code ends here #########
             else:
