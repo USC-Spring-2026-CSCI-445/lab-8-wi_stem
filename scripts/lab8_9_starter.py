@@ -492,40 +492,122 @@ class Controller:
         self._particle_filter.visualize_particles()
         self._particle_filter.visualize_estimate()
         ######### Your code ends here #########
-
+        
     def autonomous_exploration(self):
-        """Randomly explore the environment here, while making sure to call `take_measurements()` and
-        `_particle_filter.move_by()`. The particle filter should converge on the robots position eventually.
+	    """Randomly explore the environment here, while making sure to call `take_measurements()` and
+	    `_particle_filter.move_by()`. The particle filter should converge on the robots position eventually.
 
-        Note that the following visualizations functions are available:
-            visualize_position(...)
-            visualize_laserscan_ranges(...)
-        """
-        # Robot autonomously explores environment while it localizes itself
-        ######### Your code starts here #########
+	    Note that the following visualizations functions are available:
+		    visualize_position(...)
+		    visualize_laserscan_ranges(...)
+	    """
+	    # Robot autonomously explores environment while it localizes itself
+	    ######### Your code starts here #########
+	    import math
+	    import random
 
-        ######### Your code ends here #########
+	    rate = rospy.Rate(2)  # slow enough to see behavior in sim
+
+	    # Tunable parameters
+	    forward_step = 0.2
+	    turn_angle_options = [math.pi / 2, -math.pi / 2]   # left or right 90 deg
+	    front_clearance = 0.35                             # must have this much room ahead
+	    confidence_pos_thresh = 0.15                       # meters
+	    confidence_theta_thresh = 0.35                     # radians
+	    max_steps = 200
+
+	    def particle_filter_confident():
+		    particles = self._particle_filter._particles
+		    if len(particles) == 0:
+			    return False
+
+		    xs = [p.x for p in particles]
+		    ys = [p.y for p in particles]
+		    thetas = [p.theta for p in particles]
+
+		    # position spread
+		    std_x = np.std(xs)
+		    std_y = np.std(ys)
+
+		    # heading spread using circular statistics
+		    mean_sin = np.mean([math.sin(t) for t in thetas])
+		    mean_cos = np.mean([math.cos(t) for t in thetas])
+		    R = math.sqrt(mean_sin**2 + mean_cos**2)
+		    theta_spread = 1.0 - R   # smaller means headings are clustered
+
+		    return (
+			    std_x < confidence_pos_thresh
+			    and std_y < confidence_pos_thresh
+			    and theta_spread < confidence_theta_thresh
+		    )
+
+	    for _ in range(max_steps):
+		    if rospy.is_shutdown():
+			    break
+
+		    # Always update PF from current sensor readings first
+		    self.take_measurements()
+
+		    # Visualize current estimate
+		    est_x, est_y, _ = self._particle_filter.get_estimate()
+		    self.visualize_position(est_x, est_y)
+
+		    # Stop once localized with high confidence
+		    if particle_filter_confident():
+			    rospy.loginfo("Particle filter confident. Stopping autonomous exploration.")
+			    stop_twist = Twist()
+			    self.robot_ctrl_pub.publish(stop_twist)
+			    break
+
+		    # Need a valid scan to decide motion
+		    if self.laserscan is None or len(self.laserscan.ranges) == 0:
+			    rate.sleep()
+			    continue
+
+		    # Check front region for collision risk
+		    front_indices = list(range(0, 15)) + list(range(345, 360))
+		    front_ranges = []
+		    for i in front_indices:
+			    z = self.laserscan.ranges[i]
+			    if z != float("inf") and not math.isnan(z):
+				    front_ranges.append(z)
+
+		    min_front = min(front_ranges) if len(front_ranges) > 0 else float("inf")
+
+		    # Simple exploration strategy:
+		    # if front is clear -> move forward
+		    # else -> rotate 90 degrees to a random side
+		    if min_front > front_clearance:
+			    self.forward_action(forward_step)
+		    else:
+			    turn_angle = random.choice(turn_angle_options)
+			    self.rotate_action(turn_angle)
+
+		    rate.sleep()
+
+	    # ensure robot is stopped at the end
+	    stop_twist = Twist()
+	    self.robot_ctrl_pub.publish(stop_twist)
+	    ######### Your code ends here #########
 
     def forward_action(self, distance: float):
-        # Robot moves forward by a set amount during manual control
-        ######### Your code starts here #########
+		# Robot moves forward by a set amount during manual control
+		######### Your code starts here #########
         twist = Twist()
         twist.linear.x = 0.2 if distance > 0 else -0.2
         twist.angular.z = 0.0
-
+        
         from time import time
-
+        
         start_time = time()
         duration = abs(distance) / abs(twist.linear.x)
-
         while time() - start_time < duration and not rospy.is_shutdown():
             self.robot_ctrl_pub.publish(twist)
             rospy.sleep(0.01)  # Add a tiny sleep to not spam ROS at million cycles/sec
-
         twist.linear.x = 0.0
         self.robot_ctrl_pub.publish(twist)
 
-        # Notify the particle filter that the robot has just moved!
+		# Notify the particle filter that the robot has just moved! 
         self._particle_filter.move_by(distance, 0.0, 0.0)
         ######### Your code ends here #########
 
@@ -534,22 +616,19 @@ class Controller:
         ######### Your code starts here #########
         twist = Twist()
         twist.linear.x = 0.0
-
         angular_speed = 0.5
         twist.angular.z = angular_speed if goal_theta > 0 else -angular_speed
-
+        
         from time import time
-
         start_time = time()
         duration = abs(goal_theta) / angular_speed
-
         while time() - start_time < duration and not rospy.is_shutdown():
             self.robot_ctrl_pub.publish(twist)
             rospy.sleep(0.01)
-
+        
         twist.angular.z = 0.0
         self.robot_ctrl_pub.publish(twist)
-
+        
         # Notify the particle filter that the robot has rotated!
         self._particle_filter.move_by(0.0, 0.0, goal_theta)
         ######### Your code ends here #########
@@ -585,38 +664,6 @@ if __name__ == "__main__":
     controller = Controller(particle_filter)
 
     try:
-        # Manual control
-        goal_theta = 0
-        controller.take_measurements()
-        while not rospy.is_shutdown():
-            print("\nEnter 'a', 'w', 's', 'd' to move the robot:")
-            uinput = input("")
-            if uinput == "w":  # forward
-                ######### Your code starts here #########
-                controller.forward_action(0.2)
-
-                ######### Your code ends here #########
-            elif uinput == "a":  # left
-                ######### Your code starts here #########
-                controller.rotate_action(math.pi / 2)
-
-                ######### Your code ends here #########
-            elif uinput == "d":  # right
-                ######### Your code starts here #########
-                controller.rotate_action(-(math.pi / 2))
-
-                ######### Your code ends here #########
-            elif uinput == "s":  # backwards
-                ######### Your code starts here #########
-                controller.forward_action(-0.2)
-
-                ######### Your code ends here #########
-            else:
-                print("Invalid input")
-            ######### Your code starts here #########
-            controller.take_measurements()
-            ######### Your code ends here #########
-
         # Autonomous exploration
         ######### Your code starts here #########
         controller.autonomous_exploration()
